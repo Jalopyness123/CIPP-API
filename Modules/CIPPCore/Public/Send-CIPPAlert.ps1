@@ -8,7 +8,9 @@ function Send-CIPPAlert {
         $JSONContent,
         $TenantFilter,
         $APIName = 'Send Alert',
-        $ExecutingUser
+        $Headers,
+        $TableName,
+        $RowKey = [string][guid]::NewGuid()
     )
     Write-Information 'Shipping Alert'
     $Table = Get-CIPPTable -TableName SchedulerConfig
@@ -33,17 +35,37 @@ function Send-CIPPAlert {
 
                 $JSONBody = ConvertTo-Json -Compress -Depth 10 -InputObject $PowerShellBody
                 if ($PSCmdlet.ShouldProcess($($Recipients.EmailAddress.Address -join ', '), 'Sending email')) {
-                    New-GraphPostRequest -uri 'https://graph.microsoft.com/v1.0/me/sendMail' -tenantid $env:TenantID -NoAuthCheck $true -type POST -body ($JSONBody)
+                    $null = New-GraphPostRequest -uri 'https://graph.microsoft.com/v1.0/me/sendMail' -tenantid $env:TenantID -NoAuthCheck $true -type POST -body ($JSONBody)
                 }
             }
-            Write-LogMessage -API 'Webhook Alerts' -message "Sent a webhook alert to email: $Title" -tenant $TenantFilter -sev info
-
+            Write-LogMessage -API 'Webhook Alerts' -message "Sent an email alert: $Title" -tenant $TenantFilter -sev info
+            return "Sent an email alert: $Title"
         } catch {
             $ErrorMessage = Get-CippException -Exception $_
             Write-Information "Could not send webhook alert to email: $($ErrorMessage.NormalizedError)"
             Write-LogMessage -API 'Webhook Alerts' -message "Could not send webhook alerts to email. $($ErrorMessage.NormalizedError)" -tenant $TenantFilter -sev Error -LogData $ErrorMessage
+            return "Could not send webhook alert to email: $($ErrorMessage.NormalizedError)"
         }
+    }
 
+    if ($Type -eq 'table' -and $TableName) {
+        Write-Information 'Trying to send to Table'
+        try {
+            $Table = Get-CIPPTable -TableName $TableName
+            $Alert = @{
+                PartitionKey = $TenantFilter ?? 'Alert'
+                RowKey       = $RowKey
+                Title        = $Title
+                Data         = [string]$JSONContent
+                Tenant       = $TenantFilter
+            }
+            Add-CIPPAzDataTableEntity @Table -Entity $Alert
+            return $Alert.RowKey
+        } catch {
+            $ErrorMessage = Get-CippException -Exception $_
+            Write-Information "Could not send alerts to table: $($ErrorMessage.NormalizedError)"
+            Write-LogMessage -API 'Webhook Alerts' -message "Could not send alerts to table: $($ErrorMessage.NormalizedError)" -tenant $TenantFilter -sev Error -LogData $ErrorMessage
+        }
     }
 
     if ($Type -eq 'webhook') {
